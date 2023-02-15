@@ -1,36 +1,41 @@
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpListener;
+mod command;
+mod list;
+mod value;
 
-use std::env;
-use std::error::Error;
+use std::io::prelude::*;
+use std::net::TcpListener;
 use std::str;
+use std::sync::{Arc, Mutex};
+fn main() {
+    let shared_value = Arc::new(Mutex::new(value::Value::new()));
+    let shared_list = Arc::new(Mutex::new(list::List::new()));
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn Error>> {
-    let addr = env::args()
-        .nth(1)
-        .unwrap_or_else(|| "127.0.0.1:2606".to_string());
+    let data = Arc::new(Mutex::new(Vec::new()));
 
-    let listener = TcpListener::bind(&addr).await?;
-    println!("Listening on: {}", addr);
+    let listener = TcpListener::bind("127.0.0.1:2606").unwrap();
 
     loop {
-        let (mut socket, _) = listener.accept().await?;
-        tokio::spawn(async move {
-            loop {
-                let mut buf = vec![0; 1024];
-                let n = socket.read(&mut buf).await.unwrap();
+        let (socket, _) = listener.accept().unwrap();
+        let data = data.clone();
 
-                if n == 0 {
-                    return;
+        std::thread::spawn(move || {
+            let mut socket = socket;
+            let mut buffer = [0; 1024];
+
+            loop {
+                let bytes_read = socket.read(&mut buffer).unwrap();
+                if bytes_read == 0 {
+                    break;
                 }
 
-                match str::from_utf8(&buf) {
-                    Ok(v) => println!("{} - {}", n, v),
+                let mut data = data.lock().unwrap();
+                data.extend_from_slice(&buffer[..bytes_read]);
+                socket.write_all(&buffer[0..bytes_read]).unwrap();
+
+                match str::from_utf8(&buffer) {
+                    Ok(v) => println!("Value: {}", v),
                     Err(e) => panic!("Invalid UTF-8 sequence: {}", e),
                 };
-
-                socket.write_all(&buf[0..n]).await.unwrap();
             }
         });
     }
